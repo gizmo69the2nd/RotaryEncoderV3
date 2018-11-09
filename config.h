@@ -7,9 +7,9 @@
 #define DATA_PIN  6 // Connects to the Q7 pin the 165
 #define CLK_PIN   4 // Connects to the Clock pin the 165
 
-#define RELAY     13
-#define RED_LED   10
-#define GREEN_LED 11
+#define RELAY     3
+#define RED_LED   7
+#define GREEN_LED 8
 #define BUTTON    9
 
 
@@ -17,9 +17,15 @@
 #define INPUT_TIME          1500
 #define CLEAR_TIME          10000
 #define RESET_TIME          5000
-#define READ_INTERVAL       111
+#define READ_INTERVAL       12
+#define BLINK_INTERVAL      500
 
-#define MAX_KEY_SIZE        5
+//BUTTON debounce
+#define BUTTON_SHORT 50
+#define BUTTON_LONG  1000
+
+
+#define MAX_KEY_SIZE        10
 
 /* How many shift register chips are daisy-chained.
 */

@@ -14,6 +14,10 @@
 #define SOLVED              8
 #define IDLE                9
 #define OPEN                10
+#define READ_BUTTON         11
+#define ADD_TO_KEY          12
+#define SAVE_EEPROM         13
+#define LOAD_EEPROM         14
 
 typedef enum 
 {
@@ -26,6 +30,7 @@ typedef enum
 {
   RED,
   GREEN,
+  ORANGE,
   OFF
 }Led_Color;
 
@@ -37,7 +42,7 @@ typedef struct
 
 typedef enum
 {
-  NORMAL,
+  RUN,
   PROG
 }RunMode;
 

@@ -7,7 +7,9 @@
 uint8_t state;        //current FSM state
 uint8_t index = 0;
 uint8_t keySize = MAX_KEY_SIZE;
-uint8_t runMode = NORMAL;
+uint8_t runMode = RUN;
+
+uint64_t startTime = 0;
 
 InputValue currentInput;
 InputValue prevInput;
@@ -23,6 +25,13 @@ uint8_t fsmOK();
 uint8_t fsmNOK();
 uint8_t fsmSolved();
 uint8_t fsmIdle();
+uint8_t fsmOpen();
+uint8_t fsmLoadEEPROM();
+
+//Programming specific states
+uint8_t fsmReadButton();
+uint8_t fsmSaveEEPROM();
+uint8_t fsmAddToKey();
 
 
 
@@ -32,60 +41,74 @@ Scheduler ts;
 Task tInputTimer(INPUT_TIME, TASK_FOREVER, &callbackInput, &ts, false);
 Task tResetTimer(RESET_TIME, TASK_FOREVER, &callbackReset, &ts, false);
 Task tClearTimer(CLEAR_TIME, TASK_FOREVER, &callbackClear, &ts, false);
-Task tReadTimer(READ_INTERVAL, TASK_FOREVER ,&callbackRead, &ts, true);
+Task tReadTimer(READ_INTERVAL, TASK_FOREVER, &callbackRead, &ts, false);
+Task tBlinkLED(BLINK_INTERVAL, TASK_FOREVER, &callbackBlink, &ts, false);
 
 
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
+    // put your setup code here, to run once:
+    Serial.begin(115200);
 
-  /* Initialize digital pins...
-  */
-  pinMode(LOAD_PIN, OUTPUT);
-  pinMode(CLK_EN, OUTPUT);
-  pinMode(CLK_PIN, OUTPUT);
-  pinMode(DATA_PIN, INPUT);
+    /* Initialize digital pins...
+    */
+    pinMode(LOAD_PIN, OUTPUT);
+    pinMode(CLK_EN, OUTPUT);
+    pinMode(CLK_PIN, OUTPUT);
+    pinMode(DATA_PIN, INPUT);
 
-  pinMode(RELAY,OUTPUT);
-  pinMode(GREEN_LED,OUTPUT);
-  pinMode(RED_LED,OUTPUT);
-  pinMode(BUTTON,INPUT_PULLUP);
+    pinMode(RELAY,OUTPUT);
+    pinMode(GREEN_LED,OUTPUT);
+    pinMode(RED_LED,OUTPUT);
+    pinMode(BUTTON,INPUT_PULLUP);
 
-  digitalWrite(CLK_PIN, LOW);
-  digitalWrite(LOAD_PIN, HIGH);
+    digitalWrite(CLK_PIN, LOW);
+    digitalWrite(LOAD_PIN, HIGH);
+    /*
+    secretKey[0].position = 15;
+    secretKey[0].direction = CW;
 
-  secretKey[0].position = 15;
-  secretKey[0].direction = CW;
+    secretKey[1].position = 20;
+    secretKey[1].direction = CCW;
 
-  secretKey[1].position = 20;
-  secretKey[1].direction = CCW;
+    secretKey[2].position = 1;
+    secretKey[2].direction = CW;
 
-  secretKey[2].position = 1;
-  secretKey[2].direction = CW;
+    keySize = 3;
+    */
+    state = LOAD_EEPROM;
 
-  while (digitalRead(BUTTON) == 0)
-  {
-    runMode = PROG;
-  }
-
-  keySize = 3;
-
-  state = RESET;
+    while (digitalRead(BUTTON) == 0)
+    {
+        setLED(ORANGE);
+        runMode = PROG;
+        state = RESET;
+        //Serial.println("Entering PROG mode");
+    }
 
 }
 
 void loop()
 {
-  if (runMode == NORMAL) 
+    /*
+  clearEEPROM();
+  dumpEEPROM();
+  while(1==1);
+  */
+
+  if (runMode == RUN) 
   {
+    if (tBlinkLED.isEnabled()) tBlinkLED.disable();
     execNormal();
   }
   else
   {
+    if (!tBlinkLED.isEnabled()) tBlinkLED.enable();
     execProg();
   }
 }
 
+
+//Normal execution loop
 void execNormal() {
   // put your main code here, to run repeatedly:
   uint8_t nextState = RESET;
@@ -130,7 +153,11 @@ void execNormal() {
       break;
 
     case OPEN:
-      nextState = OPEN;
+      nextState = fsmOpen();
+      break;
+    
+    case LOAD_EEPROM:
+      nextState = fsmLoadEEPROM();
       break;
 
     default:
@@ -142,11 +169,154 @@ void execNormal() {
 }
 
 
+//Programming execution loop
+void execProg()
+{
+  //Serial.println("Looping PROG");
+  uint8_t nextState = RESET;
+  switch(state)
+  {
+    case RESET:
+      nextState = fsmReset();
+      break;
+
+    case READ_ENC:
+      fsmReadEnc(); //Ignore return value
+      nextState = READ_BUTTON; //Manualy set next state
+      break;
+
+    case READ_BUTTON:
+      nextState = fsmReadButton();
+      break;
+
+    case ADD_TO_KEY:
+      nextState = fsmAddToKey();
+      break;
+
+    case SAVE_EEPROM:
+      nextState = fsmSaveEEPROM();
+      break;
+
+    case IDLE:
+      //Do nothing until READ_INTERVAL timer has run out.
+      //Serial.println("Ideling");
+      nextState = fsmIdle();
+      break;
+
+    default:
+      nextState = RESET;
+  }
+  state = nextState;
+  ts.execute();
+}
+
 /**
  * FSM functions
  * 
  **/
 
+/**
+ * Check if programming button is pressed.
+ * If pressed and released, return ADD_TO_KEY
+ * Else go into IDLE mode
+ **/
+uint8_t fsmReadButton()
+{
+  //Serial.println("Reading button");
+  if (digitalRead(BUTTON) == 0)
+  {
+    //Button pressed
+    //Serial.print("Button pressed ");
+    //Serial.println(buttonCounter);
+    if (startTime == 0) startTime = millis();
+  }
+  else
+  {
+    //Button released
+    if (startTime > 0)
+    {
+      Serial.println("Button released");
+      uint64_t timePassed = millis() - startTime;
+      if (timePassed >= BUTTON_SHORT)
+      {
+        startTime = 0;
+        if (timePassed >= BUTTON_LONG)
+        {
+          Serial.println("Button long press");
+          return SAVE_EEPROM;
+        }
+        else
+        {
+          Serial.println("Button short press");
+          return ADD_TO_KEY;
+        }
+      }
+      startTime = 0;
+    }
+  }
+  return IDLE;
+}
+
+/**
+ * Add current position and direction to the secret key
+ * Increase KeySize by one 
+ * Return to IDLE
+ **/
+uint8_t fsmAddToKey()
+{
+  Serial.print("Adding ");
+  Serial.print(currentInput.position);
+  Serial.print(" - ");
+  Serial.print(currentInput.direction);
+  Serial.println(" to secret key...");
+
+  secretKey[index] = currentInput;
+  index++;
+  printSecretKey(secretKey,index);
+  //delay(5000);
+  return IDLE;
+}
+
+/**
+ * Save current secret key to EEPROM
+ * Save keySize to EEPROM
+ * After saving change mode to RUN and state to RESET 
+ * 
+ **/
+uint8_t fsmSaveEEPROM()
+{
+  runMode = RUN;
+  Serial.println("Saving Secret Key to EEPROM");
+  writeEEPROM(secretKey,index);
+  //dumpEEPROM();
+  return LOAD_EEPROM;
+}
+
+
+/**
+ * Load secret key from EEPROM
+ * 
+ **/
+uint8_t fsmLoadEEPROM()
+{
+  //dumpEEPROM();
+  Serial.println("Loading Secret Key from EEPROM");
+  if (readEEPROM(secretKey,&keySize))
+  {
+      //Key loaded correctly
+    Serial.println("Loaded Valid key: ");
+    printSecretKey(secretKey,keySize);
+  }
+  else
+  {
+      //No valid key found. Enter PROG mode
+    Serial.println("No Valid Key");
+    runMode = PROG;
+  }
+
+  
+  return RESET;
+}
 
 /**
  * Reset all timers, outputs and variables
@@ -192,23 +362,31 @@ uint8_t fsmReset()
  **/
 uint8_t fsmReadEnc()
 {
+    uint8_t ret = IDLE;
     tReadTimer.disable();
-    prevInput = currentInput;
+    
     uint8_t shiftVal = read_shift();
     if (shiftVal != 0) currentInput = readInputs(prevInput,shiftVal);
-    /*
-    Serial.print("prev:\t");
-    Serial.print(prevInput.position);
-    Serial.print("\t");
-    Serial.println(dirToString(prevInput.direction));
-    
-    Serial.print("curr:\t");
-    Serial.print(currentInput.position);
-    Serial.print("\t");
-    Serial.println(dirToString(currentInput.direction));
-*/
-    if (currentInput.position != prevInput.position) return RESTART_TIMERS;
-    else return IDLE;
+
+    if (currentInput.position != prevInput.position)
+    {
+      
+        Serial.print("prev:\t");
+        Serial.print(prevInput.position);
+        Serial.print("\t");
+        Serial.print(dirToString(prevInput.direction));
+        
+        Serial.print("\t\tcurr:\t");
+        Serial.print(currentInput.position);
+        Serial.print("\t");
+        Serial.println(dirToString(currentInput.direction));
+
+        ret = RESTART_TIMERS;
+    }
+    else ret = IDLE;
+
+    prevInput = currentInput;
+    return ret;
 }
 
 /**
@@ -288,7 +466,7 @@ uint8_t fsmRestartTimer()
  * Called when current position and direction match secret key
  * Increase current index by one and light up green LED
  * If index equals KeySize goto SOLVED
- * else goto READ_ENC
+ * else goto IDLE
  **/
 uint8_t fsmOK()
 {
@@ -323,7 +501,7 @@ uint8_t fsmNOK()
  * Called when index matches KeySize. This means correct sequence is entered.
  * Toggle relay
  * restart RESET_TIME timer
- * goto IDLE state
+ * goto OPEN state
  **/
 uint8_t fsmSolved()
 {
@@ -335,10 +513,6 @@ uint8_t fsmSolved()
 
     //Turn on relay
     digitalWrite(RELAY,HIGH);
-
-    //start reset timeout 
-    if (tResetTimer.isEnabled()) tResetTimer.restartDelayed();
-    else tResetTimer.enableDelayed();
 
     return OPEN;
 }
@@ -353,4 +527,13 @@ uint8_t fsmIdle()
   }
 
   return IDLE;
+}
+
+uint8_t fsmOpen()
+{
+
+  ///start reset timeout 
+  if (!tResetTimer.isEnabled()) tResetTimer.enableDelayed();
+  
+  return OPEN;
 }
